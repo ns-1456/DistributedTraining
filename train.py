@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Training entrypoint: single-GPU, DDP, ZeRO-1.
+
 import argparse
 import os
 import time
