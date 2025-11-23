@@ -22,6 +22,7 @@ CONFIGS: dict[str, dict[str, int]] = {
     "medium": {"d_model": 1024, "d_ff": 4096, "num_layers": 24, "num_heads": 16},
     "large": {"d_model": 1280, "d_ff": 5120, "num_layers": 36, "num_heads": 20},
     "xl": {"d_model": 1600, "d_ff": 6400, "num_layers": 48, "num_heads": 25},
+    "2.7b": {"d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32},
 }
 
 
@@ -103,11 +104,12 @@ def scaled_dot_product_attention(
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int) -> None:
+    def __init__(self, d_model: int, num_heads: int, use_flash: bool = False) -> None:
         super().__init__()
         assert d_model % num_heads == 0
         self.num_heads = num_heads
         self.d_head = d_model // num_heads
+        self.use_flash = use_flash
 
         self.W_q = nn.Parameter(torch.empty(d_model, d_model))
         self.W_k = nn.Parameter(torch.empty(d_model, d_model))
@@ -134,7 +136,20 @@ class MultiHeadAttention(nn.Module):
 
         Q, K = self.rope(Q, K)
 
-        attn_out = scaled_dot_product_attention(Q, K, V, mask=mask)
+        if self.use_flash:
+            try:
+                from cuda.flash_attn_func import flash_attention_2
+                attn_out = flash_attention_2(Q, K, V, is_causal=True)
+            except ImportError:
+                from cs336_systems.flash_attention import flash_attention_pytorch
+                BH = B * self.num_heads
+                q_flat = Q.reshape(BH, T, self.d_head)
+                k_flat = K.reshape(BH, T, self.d_head)
+                v_flat = V.reshape(BH, T, self.d_head)
+                attn_out = flash_attention_pytorch(q_flat, k_flat, v_flat, is_causal=True)
+                attn_out = attn_out.reshape(B, self.num_heads, T, self.d_head)
+        else:
+            attn_out = scaled_dot_product_attention(Q, K, V, mask=mask)
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, D)
 
         return torch.matmul(attn_out, self.W_o)
@@ -162,10 +177,10 @@ class SwiGLUFFN(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int) -> None:
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, use_flash: bool = False) -> None:
         super().__init__()
         self.norm1 = RMSNorm(d_model)
-        self.attn = MultiHeadAttention(d_model, num_heads)
+        self.attn = MultiHeadAttention(d_model, num_heads, use_flash=use_flash)
         self.norm2 = RMSNorm(d_model)
         self.ffn = SwiGLUFFN(d_model, d_ff)
 
@@ -184,12 +199,13 @@ class TransformerLM(nn.Module):
         num_heads: int,
         d_ff: int,
         max_seq_len: int = 1024,
+        use_flash: bool = False,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.embedding = nn.Parameter(torch.empty(vocab_size, d_model))
         self.blocks = nn.ModuleList(
-            [TransformerBlock(d_model, num_heads, d_ff) for _ in range(num_layers)]
+            [TransformerBlock(d_model, num_heads, d_ff, use_flash=use_flash) for _ in range(num_layers)]
         )
         self.norm = RMSNorm(d_model)
         self.head = nn.Parameter(torch.empty(d_model, vocab_size))
@@ -213,7 +229,7 @@ class TransformerLM(nn.Module):
         return torch.matmul(x, self.head)
 
     @staticmethod
-    def from_config(config_name: str) -> "TransformerLM":
+    def from_config(config_name: str, use_flash: bool = False) -> "TransformerLM":
         cfg = CONFIGS[config_name]
         return TransformerLM(
             vocab_size=10000,
@@ -222,4 +238,5 @@ class TransformerLM(nn.Module):
             num_heads=cfg["num_heads"],
             d_ff=cfg["d_ff"],
             max_seq_len=1024,
+            use_flash=use_flash,
         )

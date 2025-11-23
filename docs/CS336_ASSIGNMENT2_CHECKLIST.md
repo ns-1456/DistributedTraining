@@ -2,64 +2,96 @@
 
 This document maps every **problem** and **deliverable** from CS336 Assignment 2 PDF (in workspace root: `cs336_spring2025_assignment2_systems.pdf`) to this repo. We use **CUDA** kernels (not Triton) for Flash Attention 2; the assignment uses Triton—functionality is equivalent.
 
+**Status: All components implemented.**
+
 ---
 
 ## §1.1 Profiling and Benchmarking
 
-| Problem | Points | Our implementation | Notebook / How to run |
-|--------|--------|--------------------|------------------------|
-| **benchmarking_script** | 4 | `cs336_systems/benchmark.py`: `benchmark_model(config_name, batch_size, seq_len, n_warmup, n_steps, mode, mixed_precision, device)`. Initializes model from CONFIGS (Table 1 sizes), random batch, warmup then timed steps, `timeit.default_timer()`, `torch.cuda.synchronize()` after each step. Modes: forward, forward_backward, full_step. | **Notebook §1–§2**: Run benchmark for small/medium, seq 128/256/512; table and plots. |
-| (b) Timings | — | Same script; use 5 warmup, 10 steps. | Report mean ± std forward/backward in writeup. |
-| (c) No warmup | — | Re-run with 0, 1, 2 warmup; compare. | **Notebook**: Add cell for warmup vs no-warmup comparison; answer in writeup. |
-| **nsys_profile** | 5 | — | Run `nsys profile -o result python -m cs336_systems.benchmark ...`; use NVTX ranges in model if desired. Answer (a)–(e) in writeup from profile. |
+| Problem | Points | Our implementation | How to run |
+|--------|--------|--------------------|------------|
+| **benchmarking_script** | 4 | `cs336_systems/benchmark.py`: Configurable model init from CONFIGS, random batch, warmup + timed steps, `timeit.default_timer()`, `torch.cuda.synchronize()` after each step. Modes: `forward`, `forward_backward`, `full_step`. | `python -m cs336_systems.benchmark --config small --seq_len 512 --mode forward_backward` |
+| (b) Timings | — | Same script; `--n_warmup 5`, `--n_steps 10`. | Report mean ± std forward/backward in writeup. |
+| (c) No warmup | — | Re-run with `--n_warmup 0` (or 1, 2) and compare. | Compare warmup vs no-warmup; answer in writeup. |
+| **nsys_profile** | 5 | NVTX ranges in `benchmark.py` (`use_nvtx=True`). | `nsys profile -o result python -m cs336_systems.benchmark --config small --mode forward --nvtx` |
 | **mixed_precision_accumulation** | 1 | — | Run the four code blocks from PDF; comment on FP16 vs FP32 accumulation in writeup. |
-| **benchmarking_mixed_precision** | 2 | `benchmark_model(..., mixed_precision=True)` with `torch.autocast(device_type="cuda", dtype=torch.bfloat16)`. | **Notebook §3**: FP32 vs BF16 comparison table and bar chart. (a)(b) ToyModel dtypes and LayerNorm in writeup.) |
-| **memory_profiling** | 4 | Add option to benchmark script: `torch.cuda.memory._record_memory_history`, run step, `_dump_snapshot("memory_snapshot.pickle")`. | Add notebook cell or script path; load snapshot in pytorch.org/memory_viz. Deliver (a) two timelines, (b) peak table, (c) mixed-precision peak, (d) residual stream size, (e) largest allocations in writeup. |
+| **benchmarking_mixed_precision** | 2 | `--mixed_precision` uses `torch.autocast(device_type="cuda", dtype=torch.bfloat16)`. | `python -m cs336_systems.benchmark --config small --mixed_precision --compare_precision` |
+| **memory_profiling** | 4 | `--memory_profile`: `torch.cuda.memory._record_memory_history()`, run step, `_dump_snapshot("memory_snapshot_*.pickle")`. | `python -m cs336_systems.benchmark --config small --memory_profile`. Load snapshot at pytorch.org/memory_viz. |
+| (Sweep + JSON) | — | `--configs`, `--seq_lens`, `--modes`, `--compare_precision`, `--output_json results.json`. | `python -m cs336_systems.benchmark --configs small medium --seq_lens 128 256 512 --output_json out.json` |
+| (torch.compile) | — | `--compile` wraps model with `torch.compile()`. | `python -m cs336_systems.benchmark --config small --compile` |
 
 ---
 
 ## §1.2–1.3 Attention and Flash Attention 2
 
-| Problem | Points | Our implementation | Notebook / How to run |
-|--------|--------|--------------------|------------------------|
-| **pytorch_attention** | 2 | Standalone attention benchmark: batch=8, single head; sweep d in [16,32,64,128], seq in [256,1024,4096,8192,16384]; time 100 fwd, memory before backward, 100 backward; warmup + sync. | Implement in `cuda/benchmark_fa2.py` or separate script; report table, OOM size, memory accounting, paragraph in writeup. |
-| **torch_compile** | 2 | — | (a) Add compiled attention to attention benchmark script; table vs uncompiled. (b) `torch.compile(model)` in benchmark script; table vanilla vs compiled. |
-| **flash_forward** (PyTorch tiled) | — | Optional: PyTorch autograd Function with tiled FA2 forward (no Triton). | For debugging; we have CUDA kernel. |
-| **flash_forward** (Triton/CUDA) | 15 | `cuda/flash_attention.cu`: Flash Attention 2 **CUDA** forward (tiled, online softmax, causal), returns O and L. `cuda/flash_attn_func.py`: `FlashAttention2` autograd. | Build: `cd cuda && pip install -e .`; **Notebook** or `benchmark_fa2.py`: compare FA2 vs vanilla. |
-| **flash_backward** | 5 | Backward with recomputation (L, Q, K, V); D = rowsum(O◦dO); eqs 13–19. Implemented in CUDA or torch.compile in our repo. | `benchmark_fa2.py`: forward+backward timings. |
-| **flash_benchmarking** | 5 | `cuda/benchmark_fa2.py`: sweep seq_len (e.g. 128–65536), d_head (16–128), BF16/FP32; batch 1, causal; report table. | Run script; put table in writeup. |
+| Problem | Points | Our implementation | How to run |
+|--------|--------|--------------------|------------|
+| **pytorch_attention** | 2 | `cuda/benchmark_fa2.py`: batch=8, single head; sweep d_head ∈ [16,32,64,128], seq_len ∈ [256,1024,4096,8192,16384]; warmup + sync, fwd/back timings, memory. | `python -m cuda.benchmark_fa2 --mode pytorch_attn --backward` |
+| **torch_compile** | 2 | `compiled_attention` (naive attention under `@torch.compile`) in `cuda/benchmark_fa2.py`. FA2 vs naive vs compiled comparison. | `python -m cuda.benchmark_fa2 --mode flash --backward` |
+| **flash_forward** (PyTorch tiled) | — | `cs336_systems/flash_attention.py`: Pure PyTorch `FlashAttentionPyTorch` autograd Function; tiled fwd+bwd, online softmax, causal. | Tests: `pytest tests/test_attention.py` |
+| **flash_forward** (CUDA) | 15 | `cuda/flash_attention.cu` + `cuda/flash_attn_func.py`: Flash Attention 2 **CUDA** forward (tiled, online softmax, causal), returns O and L. | Build: `cd cuda && pip install -e .` |
+| **flash_backward** | 5 | `cuda/flash_attn_func.py`: CUDA backward with recomputation (L, Q, K, V); eqs 13–19. | `python -m cuda.benchmark_fa2 --mode flash --backward` |
+| **flash_benchmarking** | 5 | `cuda/benchmark_fa2.py`: sweep seq_len (e.g. 256–16384), d_head (16–128), naive vs cuda_fa2 vs torch.compile; batch 1, causal. | `python -m cuda.benchmark_fa2 --mode flash --seq_lens 128 256 512 1024 --d_heads 16 32 64 --backward --output_json fa2_results.json` |
+| Model integration | — | `cs336_systems/model.py`: `MultiHeadAttention(use_flash=True)` swaps attention implementation. | `train.py --use_flash` |
 
 ---
 
 ## §2 Distributed Data Parallel
 
-| Problem | Points | Our implementation | Notebook / How to run |
-|--------|--------|--------------------|------------------------|
-| **DDP** | — | `cs336_systems/ddp.py`: `DistributedDataParallel`, `DistributedSampler`, init with `torchrun` or `mp.spawn`, gradient accumulation, mixed precision. | `torchrun --nproc_per_node=2 cs336_systems/ddp.py ...` (or run `train.py --ddp`). Document in README; Kaggle dual-GPU instructions. |
+| Problem | Points | Our implementation | How to run |
+|--------|--------|--------------------|------------|
+| **DDP** | — | `cs336_systems/ddp.py`: data utilities, `setup_distributed`, `DistributedSampler`. `cs336_systems/ddp_custom.py`: `DDPIndividualParameters` (per-param async all-reduce), `DDPBucketed` (bucketed gradient communication). | `torchrun --nproc_per_node=2 train.py --ddp --ddp_mode pytorch` (or `individual`, `bucketed`) |
+| Gradient accumulation | — | Supported in `train.py`. | — |
+| Mixed precision | — | `--mixed_precision` with `GradScaler`. | `train.py --ddp --mixed_precision` |
 
 ---
 
 ## §2 Optimizer state sharding
 
-| Problem | Points | Our implementation | Notebook / How to run |
-|--------|--------|--------------------|------------------------|
-| **Optimizer sharding (ZeRO-1)** | — | `cs336_systems/optimizer_sharding.py`: `ShardedAdamW` — partition m,v by parameter shard, all-reduce grads, local update, all-gather params. | Use with DDP; optional notebook cell for memory comparison. |
+| Problem | Points | Our implementation | How to run |
+|--------|--------|--------------------|------------|
+| **Optimizer sharding (ZeRO-1)** | — | `cs336_systems/optimizer_sharding.py`: `ShardedOptimizer` wraps any optimizer; partitions m,v by parameter shard, broadcast updated params. | `train.py --ddp --sharded_optimizer` |
+| **compare_memory** | — | `compare_memory(model)` utility in `optimizer_sharding.py` for memory comparison. | Import and call for memory profiling. |
 
 ---
 
-## Model sizing (Table 1)
+## Tests
 
-Our `CONFIGS` in `cs336_systems/model.py`: small (768, 3072, 12, 12), medium (1024, 4096, 24, 16), large (1280, 5120, 36, 20), xl (1600, 6400, 48, 25). We do not have 2.7B in the table; you can add it (2560, 10240, 32, 32) for memory profiling if desired.
+| Test suite | Coverage | How to run |
+|------------|----------|------------|
+| `tests/adapters.py` | Adapter functions for all implementations (FlashAttention PyTorch/CUDA, DDP individual/bucketed, ShardedOptimizer). | Used by other tests. |
+| `tests/test_attention.py` | Flash attention forward + backward (PyTorch and CUDA). | `pytest tests/test_attention.py` |
+| `tests/test_ddp.py` | Bucketed DDP (`DDPBucketed`). | `pytest tests/test_ddp.py` |
+| `tests/test_ddp_individual_parameters.py` | Per-param DDP (`DDPIndividualParameters`). | `pytest tests/test_ddp_individual_parameters.py` |
+| `tests/test_sharded_optimizer.py` | ZeRO-1 `ShardedOptimizer`. | `pytest tests/test_sharded_optimizer.py` |
 
 ---
 
-## Summary: what the notebook runs
+## Model configurations (Table 1)
 
-- **§1** Benchmark forward/forward_backward for small & medium, multiple seq lengths; table.
-- **§2** Plots: forward time and fwd+bwd time vs seq_len.
-- **§3** Mixed precision: FP32 vs BF16 comparison.
+| Config | d_model | d_ff | num_layers | num_heads |
+|--------|---------|------|------------|-----------|
+| small | 768 | 3072 | 12 | 12 |
+| medium | 1024 | 4096 | 24 | 16 |
+| large | 1280 | 5120 | 36 | 20 |
+| xl | 1600 | 6400 | 48 | 25 |
+| 2.7b | 2560 | 10240 | 32 | 32 |
 
-## What to add for full assignment
+Defined in `cs336_systems/model.py` (`CONFIGS`).
 
-- **Notebook**: (1) Warmup vs no-warmup (and 1–2 warmup) timing cell. (2) Optional memory profiling cell (record history, dump snapshot, note path to memory_viz). (3) Optional attention-only benchmark (sweep d_head and seq_len) and torch.compile comparison.
-- **Writeup**: Nsight (a)–(e), mixed_precision_accumulation and ToyModel dtypes, memory_profiling (a)–(e), pytorch_attention table and paragraph, torch_compile tables, flash_benchmarking table.
+---
+
+## Summary: quick reference
+
+| Component | Command |
+|-----------|---------|
+| Model benchmark | `python -m cs336_systems.benchmark --config small --seq_len 512 --mode forward_backward` |
+| Sweep + JSON | `python -m cs336_systems.benchmark --configs small medium --seq_lens 128 256 512 --output_json out.json` |
+| Nsight profile | `nsys profile -o result python -m cs336_systems.benchmark --config small --nvtx` |
+| Memory snapshot | `python -m cs336_systems.benchmark --config small --memory_profile` |
+| PyTorch attention | `python -m cuda.benchmark_fa2 --mode pytorch_attn --backward` |
+| Flash attention | `python -m cuda.benchmark_fa2 --mode flash --backward` |
+| DDP training | `torchrun --nproc_per_node=2 train.py --ddp --ddp_mode bucketed` |
+| DDP + ZeRO-1 | `torchrun --nproc_per_node=2 train.py --ddp --sharded_optimizer` |
+| Flash in model | `train.py --use_flash` |
+| All tests | `pytest tests/` |

@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../project-1-rag"
+		},
+		{
+			"path": "../project-2-lm-jax"
+		}
+	]
+}
