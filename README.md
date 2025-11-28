@@ -212,3 +212,5 @@ If you hit OOM, use `--seq_len 256`. For more assignment deliverables (tables, p
 - [CS336: Language Modeling from Scratch](https://cs336.stanford.edu/) — Stanford, Spring 2025
 - [FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning](https://arxiv.org/abs/2307.08691) — Dao, 2023
 - [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054) — Rajbhandari et al., 2020
+
+See notebooks and scripts for Kaggle/Colab.
