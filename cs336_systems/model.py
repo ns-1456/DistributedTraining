@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# TransformerLM with RMSNorm, RoPE, SwiGLU; optional FlashAttention2.
+
 import math
 from dataclasses import dataclass
 
