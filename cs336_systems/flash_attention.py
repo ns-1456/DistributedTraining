@@ -1,3 +1,4 @@
+# Pure PyTorch FA2; tiled, online softmax.
 import math
 import torch
 
