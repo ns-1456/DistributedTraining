@@ -40,6 +40,8 @@ def build_tinystories_pt(
 
     print("Tokenizing...")
     tok = AutoTokenizer.from_pretrained("gpt2")
+    # Allow long stories (we chunk by seq_len later); avoids "sequence length > 1024" warning
+    tok.model_max_length = 1_000_000
     all_ids = []
     for t in texts:
         enc = tok.encode(t, add_special_tokens=False)
