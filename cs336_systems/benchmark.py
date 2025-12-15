@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Benchmark harness: forward/backward, NVTX, sweep, JSON output.
+
 import argparse
 import json
 import timeit
