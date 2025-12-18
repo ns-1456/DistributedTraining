@@ -1,3 +1,4 @@
+# CS336 systems: model, FA2, DDP, ZeRO-1, benchmark.
 from cs336_systems.model import (
     RMSNorm,
     RotaryPositionEmbedding,
