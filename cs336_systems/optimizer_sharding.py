@@ -6,7 +6,7 @@ import torch.nn as nn
 
 
 class ShardedOptimizer:
-    """ZeRO Stage 1: optimizer state partitioning across ranks.
+    """ZeRO-1: optimizer state partitioning across ranks.
 
     Wraps an arbitrary optimizer class so that each rank only maintains
     optimizer states for its shard of parameters.  After each step the
